@@ -1,4 +1,6 @@
-![image](https://user-images.githubusercontent.com/487999/79708354-29074a80-82fa-11ea-80df-0db3962fb453.png)
+![aia로고](https://user-images.githubusercontent.com/24379176/120104801-3cd5df00-c191-11eb-99d1-16e35427b58a.png)
+![carrot손보로고](https://user-images.githubusercontent.com/24379176/120104802-3e070c00-c191-11eb-98da-43434a14d748.png)
+
 
 # 보험금청구
 
@@ -9,7 +11,7 @@
 
 # Table of contents
 
-- [예제 - 음식배달](#---)
+- [보험금청구](#---)
   - [서비스 시나리오](#서비스-시나리오)
   - [체크포인트](#체크포인트)
   - [분석/설계](#분석설계)
@@ -40,9 +42,9 @@
 
 비기능적 요구사항
 1. 트랜잭션
-    1. 심사 승인 처리된 보험금 청구 요청에 대해서는 보험금 청구 취소가 되지 않아야 한다. - Sync 호출
+    1. 심사 승인 처리된 보험금 청구 요청에 대해서는 보험금 청구 취소가 되지 않아야 한다.(심사취소가 선행되어야 한다) - Sync 호출
 1. 장애격리
-    1. 진행상태가 변경되지 않더라도 보험금청구는 365일 24시간 진행되어야 한다 - Async(event-driven), Eventual Consistency
+    1. 청구이력이 업데이트되지 않더라도 지급은 365일 24시간 진행되어야 한다 - Async(event-driven), Eventual Consistency
     1. 심사시스템이 과중되면 심사를 잠시동안 받지 않고 잠시후에 하도록 유도한다. - Circuit Breaker, Fallback
 1. 성능
     1. 고객이 자주 진행상태보기 화면에서 진행상태를 확인할 수 있어야 한다. - CQRS
@@ -110,57 +112,50 @@
 
 
 ## AS-IS 조직 (Horizontally-Aligned)
-  ![image](https://user-images.githubusercontent.com/487999/79684144-2a893200-826a-11ea-9a01-79927d3a0107.png)
+  ![image](https://user-images.githubusercontent.com/24379176/120106054-7a893680-c196-11eb-8a58-479e879d7d80.png)
 
 ## TO-BE 조직 (Vertically-Aligned)
-  ![image](https://user-images.githubusercontent.com/487999/79684159-3543c700-826a-11ea-8d5f-a3fc0c4cad87.png)
+  ![image](https://user-images.githubusercontent.com/24379176/120106055-7ceb9080-c196-11eb-992e-2913a04eaee5.png)
 
 
 ## Event Storming 결과
 * MSAEz 로 모델링한 이벤트스토밍 결과:  http://msaez.io/#/storming/nZJ2QhwVc4NlVJPbtTkZ8x9jclF2/every/a77281d704710b0c2e6a823b6e6d973a/-M5AV2z--su_i4BfQfeF
 
 
-### 이벤트 도출
-![image](https://user-images.githubusercontent.com/487999/79683604-47bc0180-8266-11ea-9212-7e88c9bf9911.png)
+### Event 도출
+![image](https://user-images.githubusercontent.com/24379176/120106145-e79ccc00-c196-11eb-8f72-83882d66b57f.png)
 
-### 부적격 이벤트 탈락
-![image](https://user-images.githubusercontent.com/487999/79683612-4b4f8880-8266-11ea-9519-7e084524a462.png)
+### 부적격 Event 탈락
+![image](https://user-images.githubusercontent.com/24379176/120106148-e9ff2600-c196-11eb-82d8-2341c88c7774.png)
 
     - 과정중 도출된 잘못된 도메인 이벤트들을 걸러내는 작업을 수행함
-        - 주문시>메뉴카테고리선택됨, 주문시>메뉴검색됨 :  UI 의 이벤트이지, 업무적인 의미의 이벤트가 아니라서 제외
+        - 보험금청구완료됨: 지급처리(보험청구프로세스 최종이벤트)와 중복되며, 다른 팀에서 관심 가질만한 아벤트가 아님
+        - 지급안내문발송됨: 다른 팀에서 관심 가질만한 이벤트가 아님
+        - 보험가입내역조회됨: 상태(state) 변경을 발생시키지 않음
 
-### 액터, 커맨드 부착하여 읽기 좋게
-![image](https://user-images.githubusercontent.com/487999/79683614-4ee30f80-8266-11ea-9a50-68cdff2dcc46.png)
+### Policy 도출
+![image](https://user-images.githubusercontent.com/24379176/120106616-c341ef00-c198-11eb-9cb4-c19b454a02de.png)
 
-### 어그리게잇으로 묶기
-![image](https://user-images.githubusercontent.com/487999/79683618-52769680-8266-11ea-9c21-48d6812444ba.png)
+### Actor, Command 도출
+![image](https://user-images.githubusercontent.com/24379176/120106617-c50bb280-c198-11eb-833f-55b4fdab24ec.png)
 
-    - app의 Order, store 의 주문처리, 결제의 결제이력은 그와 연결된 command 와 event 들에 의하여 트랜잭션이 유지되어야 하는 단위로 그들 끼리 묶어줌
+### Aggregate 도출(View추가)
+![image](https://user-images.githubusercontent.com/24379176/120106871-b1ad1700-c199-11eb-907b-4fb552ae4206.png)
 
-### 바운디드 컨텍스트로 묶기
+    - 청구, 심사, 지급, 청구이력은 그와 연결된 command와 event들에 의하여 트랜잭션이 유지되어야 하는 단위로 그들 끼리 묶어줌
 
-![image](https://user-images.githubusercontent.com/487999/79683625-560a1d80-8266-11ea-9790-40d68a36d95d.png)
+### Bounded Context 도출
+![image](https://user-images.githubusercontent.com/24379176/120106873-b2de4400-c199-11eb-80aa-071d0e0d045a.png)
 
     - 도메인 서열 분리 
-        - Core Domain:  app(front), store : 없어서는 안될 핵심 서비스이며, 연견 Up-time SLA 수준을 99.999% 목표, 배포주기는 app 의 경우 1주일 1회 미만, store 의 경우 1개월 1회 미만
-        - Supporting Domain:   marketing, customer : 경쟁력을 내기위한 서비스이며, SLA 수준은 연간 60% 이상 uptime 목표, 배포주기는 각 팀의 자율이나 표준 스프린트 주기가 1주일 이므로 1주일 1회 이상을 기준으로 함.
-        - General Domain:   pay : 결제서비스로 3rd Party 외부 서비스를 사용하는 것이 경쟁력이 높음 (핑크색으로 이후 전환할 예정)
-
-### 폴리시 부착 (괄호는 수행주체, 폴리시 부착을 둘째단계에서 해놔도 상관 없음. 전체 연계가 초기에 드러남)
-
-![image](https://user-images.githubusercontent.com/487999/79683633-5aced180-8266-11ea-8f42-c769eb88dfb1.png)
+        - Core Domain: 심사, 지급 : 없어서는 안될 핵심 서비스이며, 연견 Up-time SLA 수준을 99.999% 목표, 배포주기는 심사의 경우 1주일 1회 미만, 지급의 경우 1개월 1회 미만
+        - Supporting Domain: 청구이력 : 경쟁력을 내기위한 서비스이며, SLA 수준은 연간 60% 이상 uptime 목표, 배포주기는 각 팀의 자율이나 표준 스프린트 주기가 1주일 이므로 1주일 1회 이상을 기준으로 함.
+        - General Domain: 청구 : 고객의 보험금 청구화면으로 3rd Party 외부 서비스를 사용하는 것이 경쟁력이 높음 (핑크색으로 이후 전환할 예정)
 
 ### 폴리시의 이동과 컨텍스트 매핑 (점선은 Pub/Sub, 실선은 Req/Resp)
+![image](https://user-images.githubusercontent.com/24379176/120108615-f1c3c800-c1a0-11eb-9944-428264571b3c.png)
 
-![image](https://user-images.githubusercontent.com/487999/79683641-5f938580-8266-11ea-9fdb-4e80ff6642fe.png)
-
-### 완성된 1차 모형
-
-![image](https://user-images.githubusercontent.com/487999/79683646-63bfa300-8266-11ea-9bc5-c0b650507ac8.png)
-
-    - View Model 추가
-
-### 1차 완성본에 대한 기능적/비기능적 요구사항을 커버하는지 검증
+### 기능적/비기능적 요구사항을 커버하는지 검증
 
 ![image](https://user-images.githubusercontent.com/487999/79684167-3ecd2f00-826a-11ea-806a-957362d197e3.png)
 
