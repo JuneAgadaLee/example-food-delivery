@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from kafka import KafkaConsumer
 import json
 import mysql.connector
