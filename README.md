@@ -306,7 +306,7 @@ http http://localhost:8083/payments/1
 
 ## 폴리글랏 프로그래밍 / 폴리글랏 퍼시스턴스
 
-이력관리 서비스(history)의 시나리오인 청구상태를 고객이 화면에서 확인 가능하도록 하는 기능의 구현 파트는 해당 팀이 python 을 이용하여 구현하기로 하였다. 해당 파이썬 구현체는 각 이벤트를 수신하여 처리하는 Kafka consumer와 화면을 제공하는 Flask로 구현되었고, DB는 sqlite3를 사용했다.
+이력관리 서비스(history)의 시나리오인 청구상태를 고객이 화면에서 확인 가능하도록 하는 기능의 구현 파트는 해당 팀이 python 을 이용하여 구현하기로 하였다. 해당 파이썬 구현체는 각 이벤트를 수신하여 처리하는 Kafka Consumer와 화면을 제공하는 Flask로 구현되었고, DB는 sqlite3를 사용했다.
 ```
 # (history) Kafka Consumer
 
@@ -344,57 +344,72 @@ if __name__ == "__main__":
 
 ## 동기식 호출 과 Fallback 처리
 
-분석단계에서의 조건 중 하나로 주문(app)->결제(pay) 간의 호출은 동기식 일관성을 유지하는 트랜잭션으로 처리하기로 하였다. 호출 프로토콜은 이미 앞서 Rest Repository 에 의해 노출되어있는 REST 서비스를 FeignClient 를 이용하여 호출하도록 한다. 
+분석단계에서의 조건 중 하나로 청구취소(ClaimCanceled)->심사취소(cancelReview) 간의 호출은 동기식 일관성을 유지하는 트랜잭션으로 처리하기로 하였다. 호출 프로토콜은 이미 앞서 Rest Repository 에 의해 노출되어있는 REST 서비스를 FeignClient 를 이용하여 호출하도록 한다. 
 
-- 결제서비스를 호출하기 위하여 Stub과 (FeignClient) 를 이용하여 Service 대행 인터페이스 (Proxy) 를 구현 
+- 심사 서비스를 호출하기 위하여 Stub과 (FeignClient) 를 이용하여 Service 대행 인터페이스 (Proxy) 를 구현 
 
 ```
-# (app) 결제이력Service.java
+# (claim) ReviewService.java
 
-package fooddelivery.external;
+package bomtada.external;
 
-@FeignClient(name="pay", url="http://localhost:8082")//, fallback = 결제이력ServiceFallback.class)
-public interface 결제이력Service {
+@FeignClient(name="review", url="http://localhost:8082")//, fallback = ReviewServiceFallback.class)
+public interface ReviewService {
 
-    @RequestMapping(method= RequestMethod.POST, path="/결제이력s")
-    public void 결제(@RequestBody 결제이력 pay);
+    @RequestMapping(method= RequestMethod.POST, path="/cancelReview")
+    public boolean cancelReview(@RequestBody Review review);
 
 }
 ```
 
-- 주문을 받은 직후(@PostPersist) 결제를 요청하도록 처리
+- 청구취소(cancelClaim) Command를 받은 직후(@PreUpdate) 심사취소를 요청하도록 처리
+- 심사취소가 완료되어 true가 반환되면 청구취소됨(claimCanceled) Event를 publish
 ```
-# Order.java (Entity)
+# Claim.java (Entity)
 
-    @PostPersist
-    public void onPostPersist(){
+    @PreUpdate
+    public void onPreUpdate(){
 
-        fooddelivery.external.결제이력 pay = new fooddelivery.external.결제이력();
-        pay.setOrderId(getOrderId());
-        
-        Application.applicationContext.getBean(fooddelivery.external.결제이력Service.class)
-                .결제(pay);
+        bomtada.external.Review review = new bomtada.external.Review();
+
+        review.setClaimId(getId());
+        review.setStatus("Canceled Review");
+
+        boolean rslt = ClaimApplication.applicationContext.getBean(bomtada.external.ReviewService.class)
+            .cancelReview(review);
+
+        if (rslt) {
+            ClaimCanceled claimCanceled = new ClaimCanceled();
+            BeanUtils.copyProperties(this, claimCanceled);
+            claimCanceled.publishAfterCommit();
+        }
+
     }
 ```
 
-- 동기식 호출에서는 호출 시간에 따른 타임 커플링이 발생하며, 결제 시스템이 장애가 나면 주문도 못받는다는 것을 확인:
+- 동기식 호출에서는 호출 시간에 따른 타임 커플링이 발생하며, 심사 시스템이 장애가 나면 청구도 못받는다는 것을 확인:
 
 
 ```
-# 결제 (pay) 서비스를 잠시 내려놓음 (ctrl+c)
+# 심사(review) 서비스를 잠시 내려놓음 (ctrl+c)
 
-#주문처리
-http localhost:8081/orders item=통닭 storeId=1   #Fail
-http localhost:8081/orders item=피자 storeId=2   #Fail
+# 청구취소 처리
+http PUT http://localhost:8081/claims/1 customerId=1 price=500 status="Canceled Claim" claimDt=1622641792891 #Fail
+```
+![image](https://user-images.githubusercontent.com/24379176/120586594-c5dd6680-c46e-11eb-9cc6-8856f1f7bfd8.png)
 
-#결제서비스 재기동
-cd 결제
+```
+# 심사(review) 서비스 재기동
+cd review
 mvn spring-boot:run
 
-#주문처리
-http localhost:8081/orders item=통닭 storeId=1   #Success
-http localhost:8081/orders item=피자 storeId=2   #Success
+# h2 사용으로 심사 수동 생성 필요
+http POST http://localhost:8082/reviews claimId=1 examinerId=101 customerId=1 price=500 status="Assigned Examiner" reviewDt=1622635791863
+
+# 청구취소 처리
+http PUT http://localhost:8081/claims/1 customerId=1 price=500 status="Canceled Claim" claimDt=1622641792891 #Success
 ```
+![image](https://user-images.githubusercontent.com/24379176/120586585-c1b14900-c46e-11eb-8960-f532e45701b9.png)
 
 - 또한 과도한 요청시에 서비스 장애가 도미노 처럼 벌어질 수 있다. (서킷브레이커, 폴백 처리는 운영단계에서 설명한다.)
 
@@ -404,31 +419,31 @@ http localhost:8081/orders item=피자 storeId=2   #Success
 ## 비동기식 호출 / 시간적 디커플링 / 장애격리 / 최종 (Eventual) 일관성 테스트
 
 
-결제가 이루어진 후에 상점시스템으로 이를 알려주는 행위는 동기식이 아니라 비 동기식으로 처리하여 상점 시스템의 처리를 위하여 결제주문이 블로킹 되지 않아도록 처리한다.
+심사가 승인된 후에 지급 시스템으로 이를 알려주는 행위는 동기식이 아니라 비 동기식으로 처리하여 지급 시스템의 처리를 위하여 심사접수가 블로킹 되지 않아도록 처리한다.
  
-- 이를 위하여 결제이력에 기록을 남긴 후에 곧바로 결제승인이 되었다는 도메인 이벤트를 카프카로 송출한다(Publish)
+- 이를 위하여 심사이력에 기록을 남긴 후에 곧바로 심사승인이 되었다는 도메인 이벤트를 카프카로 송출한다(Publish)
  
 ```
-package fooddelivery;
+package bomtada;
 
 @Entity
-@Table(name="결제이력_table")
-public class 결제이력 {
+@Table(name="Review_table")
+public class Review {
 
  ...
-    @PrePersist
-    public void onPrePersist(){
-        결제승인됨 결제승인됨 = new 결제승인됨();
-        BeanUtils.copyProperties(this, 결제승인됨);
-        결제승인됨.publish();
+    @PostUpdate
+    public void onPostUpdate(){
+        ReviewApproved reviewApproved = new ReviewApproved();
+        BeanUtils.copyProperties(this, reviewApproved);
+        reviewApproved.publishAfterCommit();
     }
 
 }
 ```
-- 상점 서비스에서는 결제승인 이벤트에 대해서 이를 수신하여 자신의 정책을 처리하도록 PolicyHandler 를 구현한다:
+- 지급 서비스에서는 심사승인 이벤트에 대해서 이를 수신하여 자신의 정책을 처리하도록 PolicyHandler 를 구현한다:
 
 ```
-package fooddelivery;
+package bomtada;
 
 ...
 
@@ -436,55 +451,72 @@ package fooddelivery;
 public class PolicyHandler{
 
     @StreamListener(KafkaProcessor.INPUT)
-    public void whenever결제승인됨_주문정보받음(@Payload 결제승인됨 결제승인됨){
+    public void wheneverReviewApproved_AssignPayment(@Payload ReviewApproved reviewApproved){
 
-        if(결제승인됨.isMe()){
-            System.out.println("##### listener 주문정보받음 : " + 결제승인됨.toJson());
-            // 주문 정보를 받았으니, 요리를 슬슬 시작해야지..
-            
-        }
+        if(!reviewApproved.validate()) return;
+
+        System.out.println("\n\n##### listener AssignPayment : " + reviewApproved.toJson() + "\n\n");
+        
+        # 심사승인 처리가 되었으니 지급접수를 한다.
+        Payment payment = new Payment();
+        payment.setCustomerId(reviewApproved.getCustomerId());
+        payment.setContId(reviewApproved.getContId());
+        payment.setPrice(reviewApproved.getPrice());
+        payment.setStatus("Assigned Payment");
+        payment.setPaymentDt(new Date());
+        payment.setClaimId(reviewApproved.getClaimId());
+        paymentRepository.save(payment);
     }
 
 }
-
-```
-실제 구현을 하자면, 카톡 등으로 점주는 노티를 받고, 요리를 마친후, 주문 상태를 UI에 입력할테니, 우선 주문정보를 DB에 받아놓은 후, 이후 처리는 해당 Aggregate 내에서 하면 되겠다.:
-  
-```
-  @Autowired 주문관리Repository 주문관리Repository;
-  
-  @StreamListener(KafkaProcessor.INPUT)
-  public void whenever결제승인됨_주문정보받음(@Payload 결제승인됨 결제승인됨){
-
-      if(결제승인됨.isMe()){
-          카톡전송(" 주문이 왔어요! : " + 결제승인됨.toString(), 주문.getStoreId());
-
-          주문관리 주문 = new 주문관리();
-          주문.setId(결제승인됨.getOrderId());
-          주문관리Repository.save(주문);
-      }
-  }
-
 ```
 
-상점 시스템은 주문/결제와 완전히 분리되어있으며, 이벤트 수신에 따라 처리되기 때문에, 상점시스템이 유지보수로 인해 잠시 내려간 상태라도 주문을 받는데 문제가 없다:
+지급 시스템은 청구/심사와 완전히 분리되어있으며, 이벤트 수신에 따라 처리되기 때문에, 지급 시스템이 유지보수로 인해 잠시 내려간 상태라도 청구/심사 진행에 문제가 없다:
 ```
-# 상점 서비스 (store) 를 잠시 내려놓음 (ctrl+c)
+# 지급 서비스 (payment) 를 잠시 내려놓음 (ctrl+c)
 
-#주문처리
-http localhost:8081/orders item=통닭 storeId=1   #Success
-http localhost:8081/orders item=피자 storeId=2   #Success
+# 심사승인 처리
+http PUT http://localhost:8082/reviews/1 claimId=1 examinerId=101 customerId=1 contId=80001 price=450 status="Approved Review" reviewDt=1622635799999   #Success
 
-#주문상태 확인
-http localhost:8080/orders     # 주문상태 안바뀜 확인
+# 심사이력 확인
+http http://localhost:8082/reviews    # Approved Review 확인
+```
+![image](https://user-images.githubusercontent.com/24379176/120589427-cb897b00-c473-11eb-8aed-e71816514cca.png)
 
-#상점 서비스 기동
-cd 상점
+```
+# 지급 서비스 기동
+cd payment
 mvn spring-boot:run
 
-#주문상태 확인
-http localhost:8080/orders     # 모든 주문의 상태가 "배송됨"으로 확인
+# 지급이력 확인
+http http://localhost:8083/payments     # Assigned Payment 확인
 ```
+![image](https://user-images.githubusercontent.com/24379176/120589436-cf1d0200-c473-11eb-9f4c-ab8d394d651b.png)
+
+
+## CQRS
+
+커맨드 (Create - Insert, Update, Delete : 데이터를 변경) 와 쿼리 (Select - Read : 데이터를 조회)의 책임을 분리한다.
+각각의 서비스에서 발생하는 CUD는 서비스 내에서 처리하며, Read는 이벤트 소싱을 통해 history 서비스에서 확인 할 수 있다.
+
+* 고객이 자주 진행상태보기 화면에서 진행상태를 확인할 수 있어야 한다.
+
+전체 이력 조회
+
+![image](https://user-images.githubusercontent.com/24379176/120595209-fc21e280-c47c-11eb-89b3-928829e0ea73.png)
+
+고객별 청구이력 조회
+
+![image](https://user-images.githubusercontent.com/24379176/120595912-127c6e00-c47e-11eb-92d1-3e0a133ae9a5.png)
+
+## Correlation 테스트
+
+서비스를 이용해 만들어진 각 이벤트 건은 Correlation-key 연결을 통해 식별이 가능하다.
+* Correlation-key로 식별하여 '보험금청구접수됨' 이벤트를 통해 생성된 '심사접수' 건에 대해 '보험금청구취소' 시 동일한 Correlation-key를 가지는 심사 건이 취소되는 모습을 확인한다: (FeignClient 설명부분 참고)
+
+진행상태보기 화면에서 Correlation-key인 claim_id로 조회
+
+![image](https://user-images.githubusercontent.com/24379176/120595929-15775e80-c47e-11eb-8319-86037598f983.png)
 
 
 # 운영
