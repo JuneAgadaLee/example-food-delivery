@@ -21,6 +21,9 @@
     - [폴리글랏 프로그래밍](#폴리글랏-프로그래밍)
     - [동기식 호출 과 Fallback 처리](#동기식-호출-과-Fallback-처리)
     - [비동기식 호출 과 Eventual Consistency](#비동기식-호출-과-Eventual-Consistency)
+    - [Gateway](#Gateway)
+    - [CQRS](#CQRS)
+    - [Correlation](#Correlation)
   - [운영](#운영)
     - [CI/CD 설정](#cicd설정)
     - [동기식 호출 / 서킷 브레이킹 / 장애격리](#동기식-호출-서킷-브레이킹-장애격리)
@@ -493,6 +496,97 @@ http http://localhost:8083/payments     # Assigned Payment 확인
 ```
 ![image](https://user-images.githubusercontent.com/24379176/120589436-cf1d0200-c473-11eb-9f4c-ab8d394d651b.png)
 
+## Gateway
+Gateway를 통해 마이크로 서비스들의 진입점을 통일하였다.
+
+```
+# (gateway) application.yml
+
+server:
+  port: 8088
+
+---
+
+spring:
+  profiles: default
+  cloud:
+    gateway:
+      routes:
+        - id: claim
+          uri: http://localhost:8081
+          predicates:
+            - Path=/claims/**
+        - id: review
+          uri: http://localhost:8082
+          predicates:
+            - Path=/reviews/** 
+        - id: payment
+          uri: http://localhost:8083
+          predicates:
+            - Path=/payments/** 
+        - id: history
+          uri: http://localhost:8084
+          predicates:
+            - Path=/history/**
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowedOrigins:
+              - "*"
+            allowedMethods:
+              - "*"
+            allowedHeaders:
+              - "*"
+            allowCredentials: true
+
+
+---
+
+spring:
+  profiles: docker
+  cloud:
+    gateway:
+      routes:
+        - id: claim
+          uri: http://claim:8080
+          predicates:
+            - Path=/claims/**
+        - id: review
+          uri: http://review:8080
+          predicates:
+            - Path=/reviews/** 
+        - id: payment
+          uri: http://payment:8080
+          predicates:
+            - Path=/payments/** 
+        - id: history
+          uri: http://history:8080
+          predicates:
+            # - Path=/claimHistories/** /progressPages/**
+            - Path=/history/**
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowedOrigins:
+              - "*"
+            allowedMethods:
+              - "*"
+            allowedHeaders:
+              - "*"
+            allowCredentials: true
+
+server:
+  port: 8080
+```
+```
+# 서비스 호출 테스트
+
+http http://localhost:8088/claims     #Success
+http http://localhost:8088/reviews    #Success
+http http://localhost:8088/payments   #Success
+http http://localhost:8088/history    #Success
+```
+
 
 ## CQRS
 
@@ -509,7 +603,7 @@ http http://localhost:8083/payments     # Assigned Payment 확인
 
 ![image](https://user-images.githubusercontent.com/24379176/120595912-127c6e00-c47e-11eb-92d1-3e0a133ae9a5.png)
 
-## Correlation 테스트
+## Correlation
 
 서비스를 이용해 만들어진 각 이벤트 건은 Correlation-key 연결을 통해 식별이 가능하다.
 * Correlation-key로 식별하여 '보험금청구접수됨' 이벤트를 통해 생성된 '심사접수' 건에 대해 '보험금청구취소' 시 동일한 Correlation-key를 가지는 심사 건이 취소되는 모습을 확인한다: (FeignClient 설명부분 참고)
