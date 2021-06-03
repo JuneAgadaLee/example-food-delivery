@@ -1,20 +1,29 @@
 from flask import Flask, request
-import sqlite3
 import os
 import socket
-import subprocess
+import mysql.connector
 
-subprocess.call(['python', 'policy-handler.py'])
 
 app = Flask(__name__)
 
 @app.route("/history")
 def hello():
     params = request.args.to_dict()
-    con = sqlite3.connect('test.db')
-    cur = con.cursor()
+
+
+    mydb = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="tkdtn3217",
+        database="mykafka"
+    )
+
+    mycursor = mydb.cursor()
+
+    
     if len(params) == 0:
-        cur.execute("SELECT * FROM Claim ORDER BY id DESC;")
+
+        mycursor.execute("SELECT * FROM Claim ORDER BY id DESC")
     else:
         sql = "SELECT * FROM Claim WHERE "
         for key in params.keys():
@@ -23,7 +32,11 @@ def hello():
             if (key == "claim_id"):
                 sql += "claim_id=" + request.args[key]
         sql += " ORDER BY id DESC;"
-        cur.execute(sql)
+
+        mycursor.execute(sql)
+
+    myresult = mycursor.fetchall()
+    
     html = '''<style>
                 table, th, td {
                     border: 1px solid #fff
@@ -43,10 +56,10 @@ def hello():
                     background-color: MediumSeaGreen;
                 }
             </style>'''
-    html += "<h2></h2><br/>"
-    html += "<table><tr><th>ID</th><th></th>"
-    html += "<th></th><th></th><th></th><th></th></tr>"
-    for row in cur:
+    html += "<h2>청구이력 조회</h2><br/>"
+    html += "<table><tr><th>ID</th><th>고객번호</th>"
+    html += "<th>청구번호</th><th>금액</th><th>상태</th><th>변경시각</th></tr>"
+    for row in myresult:
         html += "<tr>"
         html += "<td>" + str(row[0]) + "</td>"
         html += "<td>" + str(row[1]) + "</td>"
@@ -57,16 +70,26 @@ def hello():
         html += "</tr>"
     html += "</table>"
         
-    con.close()
+    mydb.close()
     return html
 
-    # html = "<h3>Hello {name}!</h3>" \
-    #        "<b>Hostname:</b> {hostname}<br/>"
-
-    # return html.format(name=os.getenv("NAME", "world"), hostname=socket.gethostname())
-
 def change_to_hangul(eng):
-
+    if eng == "Received Claim":
+        return "보험금청구접수됨"
+    elif eng == "Assigned Examiner":
+        return "심사자배정됨"
+    elif eng == "Approved Review":
+        return "심사승인됨"
+    elif eng == "Declined Review":
+        return "심사거절됨"
+    elif eng == "Assigned Payment":
+        return "지급접수됨"
+    elif eng == "Completed Payment":
+        return "지급처리됨"
+    elif eng == "Canceled Claim":
+        return "보험금청구취소됨"
+    elif eng == "Canceled Review":
+        return "심사취소됨"
     return eng
 
 if __name__ == "__main__":

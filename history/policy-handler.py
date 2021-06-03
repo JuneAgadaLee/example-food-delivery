@@ -1,23 +1,34 @@
 from kafka import KafkaConsumer
-import sqlite3
 import json
+import mysql.connector
 
-con = sqlite3.connect('test.db')
-cur = con.cursor()
-# cur.execute("CREATE TABLE KafkaLog(id INTEGER PRIMARY KEY AUTOINCREMENT, log TEXT);")
-cur.execute("SELECT * FROM sqlite_master WHERE type='table' AND name='Claim'")
-rows = cur.fetchall()
-if not rows:
-    cur.execute('''CREATE TABLE Claim (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                        customer_id INTEGER,
-                                        claim_id INTEGER,
-                                        price INTEGER,
+
+mydb = mysql.connector.connect(
+    host="localhost",
+    user="root",
+    password="tkdtn3217",
+    database="mykafka"
+)
+
+mycursor = mydb.cursor()
+
+mycursor.execute("SHOW TABLES")
+isexist = False
+for x in mycursor:
+    if x[0] == "Claim":
+        isexist = True
+
+if not isexist:
+    mycursor.execute('''CREATE TABLE Claim (id INT PRIMARY KEY AUTO_INCREMENT,
+                                        customer_id INT,
+                                        claim_id INT,
+                                        price INT,
                                         status TEXT, 
-                                        time DATETIME DEFAULT (DATETIME('now', 'localtime')));''')
-    con.commit()
+                                        dtm DATETIME DEFAULT CURRENT_TIMESTAMP);''')
+
+mydb.commit()
 
 
-# To consume latest messages and auto-commit offsets
 consumer = KafkaConsumer('bomtada', bootstrap_servers=['my-kafka.kafka.svc.cluster.local:9092'])
 
 for message in consumer:
@@ -28,7 +39,9 @@ for message in consumer:
     dvalue = message.value.decode('utf8').replace("'", '"')
     data = json.loads(dvalue)
     
-    cur.execute("INSERT INTO Claim(customer_id, claim_id, price, status) VALUES (?,?,?,?);", 
-            (data['customerId'], data.get('claimId', data['id']), data['price'], data['status']))
-    con.commit()
+    mycursor.execute("INSERT INTO Claim(customer_id, claim_id, price, status) VALUES (%s,%s,%s,%s)", 
+                (data['customerId'], data.get('claimId', data['id']), data['price'], data['status']))
+
+    mydb.commit()
+
 
