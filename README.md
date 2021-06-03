@@ -17,15 +17,14 @@
   - [분석/설계](#분석설계)
   - [구현:](#구현-)
     - [DDD 의 적용](#ddd-의-적용)
-    - [폴리글랏 퍼시스턴스](#폴리글랏-퍼시스턴스)
-    - [폴리글랏 프로그래밍](#폴리글랏-프로그래밍)
+    - [폴리글랏 프로그래밍 / 폴리글랏 퍼시스턴스](#폴리글랏-프로그래밍-/-폴리글랏-퍼시스턴스)
     - [동기식 호출 과 Fallback 처리](#동기식-호출-과-Fallback-처리)
     - [비동기식 호출 과 Eventual Consistency](#비동기식-호출-과-Eventual-Consistency)
     - [Gateway](#Gateway)
     - [CQRS](#CQRS)
     - [Correlation](#Correlation)
   - [운영](#운영)
-    - [CI/CD 설정](#cicd설정)
+    - [CI/CD 설정](#CI/CD설정)
     - [동기식 호출 / 서킷 브레이킹 / 장애격리](#동기식-호출-서킷-브레이킹-장애격리)
     - [오토스케일 아웃](#오토스케일-아웃)
     - [무정지 재배포](#무정지-재배포)
@@ -618,18 +617,21 @@ http http://localhost:8088/history    #Success
 ## CI/CD 설정
 
 
-각 구현체들은 각자의 source repository 에 구성되었고, 사용한 CI/CD 플랫폼은 GCP를 사용하였으며, pipeline build script 는 각 프로젝트 폴더 이하에 cloudbuild.yml 에 포함되었다.
+* 각 구현체들은 github의 source repository에 구성
+* Image repository는 ECR 사용
+* yaml파일 기반의 Code Deploy
 
 
 ## 동기식 호출 / 서킷 브레이킹 / 장애격리
 
 * 서킷 브레이킹 프레임워크의 선택: Spring FeignClient + Hystrix 옵션을 사용하여 구현함
 
-시나리오는 단말앱(app)-->결제(pay) 시의 연결을 RESTful Request/Response 로 연동하여 구현이 되어있고, 결제 요청이 과도할 경우 CB 를 통하여 장애격리.
+시나리오는 청구취소(claim)-->심사취소(review) 시의 연결을 RESTful Request/Response 로 연동하여 구현이 되어있고, 청구취소 요청이 과도할 경우 CB 를 통하여 장애격리.
 
 - Hystrix 를 설정:  요청처리 쓰레드에서 처리시간이 610 밀리가 넘어서기 시작하여 어느정도 유지되면 CB 회로가 닫히도록 (요청을 빠르게 실패처리, 차단) 설정
 ```
-# application.yml
+# (claim) application.yml
+
 feign:
   hystrix:
     enabled: true
@@ -642,12 +644,14 @@ hystrix:
 
 ```
 
-- 피호출 서비스(결제:pay) 의 임의 부하 처리 - 400 밀리에서 증감 220 밀리 정도 왔다갔다 하게
+- 피호출 서비스(심사:review) 의 임의 부하 처리 - 400 밀리에서 증감 220 밀리 정도 왔다갔다 하게
 ```
-# (pay) 결제이력.java (Entity)
+# (review) ReviewController.java
 
-    @PrePersist
-    public void onPrePersist(){  //결제이력을 저장한 후 적당한 시간 끌기
+    @RequestMapping(value = "/cancelReview",
+                    method = RequestMethod.POST,
+                    produces = "application/json;charset=UTF-8")
+    public boolean cancelReview(@RequestBody Review review) throws Exception {
 
         ...
         
@@ -659,145 +663,163 @@ hystrix:
     }
 ```
 
+- siege 툴에서 PUT 방식은 사용할 수 없어 기존에 feignClient를 호출하는 cancelClaim 이벤트를 POST로 받도록 변경하였다.
+```
+# (claim) ClaimController.java
+
+@Transactional
+@RestController
+public class ClaimController {
+private static Logger log = LoggerFactory.getLogger(ClaimController.class);
+
+@Autowired
+ClaimRepository claimRepository;
+
+@RequestMapping(value = "/claims/{claimId}",
+                method = RequestMethod.POST,
+                produces = "application/json;charset=UTF-8")
+public Claim cancelClaim(@PathVariable Long claimId, @RequestBody Claim claim) throws Exception {
+    log.info("### cancelClaim called ###");
+
+        ...
+        
+    return claim;
+}
+```
+
 * 부하테스터 siege 툴을 통한 서킷 브레이커 동작 확인:
 - 동시사용자 100명
 - 60초 동안 실시
 
 ```
-$ siege -c100 -t60S -r10 --content-type "application/json" 'http://localhost:8081/orders POST {"item": "chicken"}'
+# 청구 생성
+http POST http://localhost:8081/claims customerId=6 price=50000 status="Received Claim" claimDt=1622636792891
+
+# 청구 취소 부하테스트
+$ siege -c100 -t60S -r10 --content-type "application/json" 'http://localhost:8081/claims/1 POST {"customerId":6, "price":50000, "status":"Canceled Claim", "claimDt":1622641792891}'
 
 ** SIEGE 4.0.5
 ** Preparing 100 concurrent users for battle.
 The server is now under siege...
 
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.73 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.75 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.77 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.97 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.81 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.87 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.12 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.16 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.17 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.26 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.25 secs:     207 bytes ==> POST http://localhost:8081/orders
+HTTP/1.1 200     1.22 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.25 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.22 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.28 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.28 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.32 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.54 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.58 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.61 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.70 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.71 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.77 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.76 secs:     104 bytes ==> POST http://localhost:8081/claims/1
 
 * 요청이 과도하여 CB를 동작함 요청을 차단
 
-HTTP/1.1 500     1.29 secs:     248 bytes ==> POST http://localhost:8081/orders   
-HTTP/1.1 500     1.24 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     1.23 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     1.42 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     2.08 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.29 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     1.24 secs:     248 bytes ==> POST http://localhost:8081/orders
+HTTP/1.1 500     1.82 secs:     192 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.77 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.76 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.76 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.75 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.76 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.76 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.76 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.74 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.75 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.86 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.87 secs:     192 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.69 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.70 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     1.45 secs:     216 bytes ==> POST http://localhost:8081/claims/1
 
 * 요청을 어느정도 돌려보내고나니, 기존에 밀린 일들이 처리되었고, 회로를 닫아 요청을 다시 받기 시작
 
-HTTP/1.1 201     1.46 secs:     207 bytes ==> POST http://localhost:8081/orders  
-HTTP/1.1 201     1.33 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.36 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.63 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.65 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.69 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.71 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.71 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.74 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.76 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     1.79 secs:     207 bytes ==> POST http://localhost:8081/orders
+HTTP/1.1 200     2.03 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.03 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.07 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.09 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.13 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.19 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.22 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.19 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.30 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     1.85 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.01 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.04 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.05 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.07 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.09 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.17 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     2.22 secs:     104 bytes ==> POST http://localhost:8081/claims/1
 
 * 다시 요청이 쌓이기 시작하여 건당 처리시간이 610 밀리를 살짝 넘기기 시작 => 회로 열기 => 요청 실패처리
 
-HTTP/1.1 500     1.93 secs:     248 bytes ==> POST http://localhost:8081/orders    
-HTTP/1.1 500     1.92 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     1.93 secs:     248 bytes ==> POST http://localhost:8081/orders
+HTTP/1.1 200     3.64 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     3.75 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     3.77 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     3.80 secs:     192 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     3.77 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     3.77 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     3.77 secs:     216 bytes ==> POST http://localhost:8081/claims/1
 
 * 생각보다 빨리 상태 호전됨 - (건당 (쓰레드당) 처리시간이 610 밀리 미만으로 회복) => 요청 수락
 
-HTTP/1.1 201     2.24 secs:     207 bytes ==> POST http://localhost:8081/orders  
-HTTP/1.1 201     2.32 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.16 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.19 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.19 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.19 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.21 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.29 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.30 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.38 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.59 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.61 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.62 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     2.64 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.01 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.27 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.33 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.45 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.52 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.57 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.69 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.69 secs:     207 bytes ==> POST http://localhost:8081/orders
+HTTP/1.1 200     3.79 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     3.82 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     3.85 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     3.88 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     3.99 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     3.99 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.17 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.21 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.23 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.23 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.32 secs:     104 bytes ==> POST http://localhost:8081/claims/1
 
 * 이후 이러한 패턴이 계속 반복되면서 시스템은 도미노 현상이나 자원 소모의 폭주 없이 잘 운영됨
 
 
-HTTP/1.1 500     4.76 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.23 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.76 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.74 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.82 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.82 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.84 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.66 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     5.03 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.22 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.19 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.18 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.69 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.65 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     5.13 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.84 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.25 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.25 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.80 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.87 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.33 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.86 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.96 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.34 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 500     4.04 secs:     248 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.50 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.95 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.54 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     4.65 secs:     207 bytes ==> POST http://localhost:8081/orders
+HTTP/1.1 500     4.18 secs:     192 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     4.12 secs:     192 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.21 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.22 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.24 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.40 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.40 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     4.53 secs:     192 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.28 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.35 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     4.37 secs:     192 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.38 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.24 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.32 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     4.44 secs:     192 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 500     3.91 secs:     216 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.43 secs:     104 bytes ==> POST http://localhost:8081/claims/1
+HTTP/1.1 200     4.42 secs:     104 bytes ==> POST http://localhost:8081/claims/1
 
 
 :
-:
 
-Transactions:		        1025 hits
-Availability:		       63.55 %
-Elapsed time:		       59.78 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
-Successful transactions:        1025
-Failed transactions:	         588
-Longest transaction:	        9.20
-Shortest transaction:	        0.00
-
+Lifting the server siege...
+Transactions:		        1042 hits
+Availability:		       65.17 %
+Elapsed time:		       59.57 secs
+Data transferred:	        0.21 MB
+Response time:		        5.48 secs
+Transaction rate:	       17.49 trans/sec
+Throughput:		        0.00 MB/sec
+Concurrency:		       95.89
+Successful transactions:        1042
+Failed transactions:	         557
+Longest transaction:	        8.30
+Shortest transaction:	        0.01
+ 
 ```
-- 운영시스템은 죽지 않고 지속적으로 CB 에 의하여 적절히 회로가 열림과 닫힘이 벌어지면서 자원을 보호하고 있음을 보여줌. 하지만, 63.55% 가 성공하였고, 46%가 실패했다는 것은 고객 사용성에 있어 좋지 않기 때문에 Retry 설정과 동적 Scale out (replica의 자동적 추가,HPA) 을 통하여 시스템을 확장 해주는 후속처리가 필요.
+- 운영시스템은 죽지 않고 지속적으로 CB 에 의하여 적절히 회로가 열림과 닫힘이 벌어지면서 자원을 보호하고 있음을 보여줌. 하지만, 65.17% 가 성공하였고, 35%가 실패했다는 것은 고객 사용성에 있어 좋지 않기 때문에 Retry 설정과 동적 Scale out (replica의 자동적 추가,HPA) 을 통하여 시스템을 확장 해주는 후속처리가 필요.
 
-- Retry 의 설정 (istio)
-- Availability 가 높아진 것을 확인 (siege)
 
 ### 오토스케일 아웃
 앞서 CB 는 시스템을 안정되게 운영할 수 있게 해줬지만 사용자의 요청을 100% 받아들여주지 못했기 때문에 이에 대한 보완책으로 자동화된 확장 기능을 적용하고자 한다. 
