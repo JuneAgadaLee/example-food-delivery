@@ -94,6 +94,6 @@ def change_to_hangul(eng):
     return eng
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=8084)
+    app.run(host='localhost', port=8080)
 
 
