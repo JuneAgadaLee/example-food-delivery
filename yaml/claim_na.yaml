@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claim
+  namespace: bomtada
+  labels:
+    app: claim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: claim
+  template:
+    metadata:
+      labels:
+        app: claim
+    spec:
+      containers:
+        - name: claim
+          image: 879772956301.dkr.ecr.ap-southeast-1.amazonaws.com/user10-claim:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: api.url.review
+              valueFrom:
+                configMapKeyRef:
+                  name: bomtada-config
+                  key: api.url.review
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: claim
+  namespace: bomtada
+  labels:
+    app: claim
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: claim

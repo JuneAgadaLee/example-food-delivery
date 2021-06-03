@@ -4,9 +4,9 @@ import mysql.connector
 
 
 mydb = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="tkdtn3217",
+    host="database-2.cqcjeh663ucm.ap-southeast-1.rds.amazonaws.com",
+    user="admin",
+    password="qwe1212!Q",
     database="mykafka"
 )
 
