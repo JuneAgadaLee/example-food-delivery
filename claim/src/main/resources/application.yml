@@ -37,7 +37,11 @@ logging:
     org.springframework.cloud: debug
 server:
   port: 8081
----
+
+api:
+  url:
+    review: http://localhost:8082
+
 feign:
   hystrix:
     enabled: true
@@ -72,6 +76,8 @@ spring:
           destination: bomtada
           contentType: application/json
 
-
+api:
+  url:
+    review: http://review:8080
 
 

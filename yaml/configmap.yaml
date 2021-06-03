@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bomtada-config
+  namespace: bomtada
+data:
+  api.url.review: http://review:8080

@@ -11,7 +11,7 @@ import java.util.Date;
 // @FeignClient(name="review", url="http://review:8080")
 // @FeignClient(name="review", url="http://localhost:8082"//, fallback = ReviewServiceFallback.class)
 
-@FeignClient(name="review", url="http://localhost:8082")
+@FeignClient(name="review", url="${api.url.review}")
 public interface ReviewService {
 
     @RequestMapping(method= RequestMethod.POST, path="/cancelReview")
