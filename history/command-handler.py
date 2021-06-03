@@ -2,6 +2,9 @@ from flask import Flask, request
 import sqlite3
 import os
 import socket
+import subprocess
+
+subprocess.call(['python', 'policy-handler.py'])
 
 app = Flask(__name__)
 
@@ -40,15 +43,15 @@ def hello():
                     background-color: MediumSeaGreen;
                 }
             </style>'''
-    html += "<h2>청구이력 조회</h2><br/>"
-    html += "<table><tr><th>ID</th><th>고객번호</th>"
-    html += "<th>청구번호</th><th>금액</th><th>상태</th><th>변경시각</th></tr>"
+    html += "<h2></h2><br/>"
+    html += "<table><tr><th>ID</th><th></th>"
+    html += "<th></th><th></th><th></th><th></th></tr>"
     for row in cur:
         html += "<tr>"
         html += "<td>" + str(row[0]) + "</td>"
         html += "<td>" + str(row[1]) + "</td>"
         html += "<td>" + str(row[2]) + "</td>"
-        html += "<td>" + str(row[3]) + "원</td>"
+        html += "<td>" + str(row[3]) + "</td>"
         html += "<td>" + change_to_hangul(str(row[4])) + "</td>"
         html += "<td>" + str(row[5]) + "</td>"
         html += "</tr>"
@@ -63,22 +66,7 @@ def hello():
     # return html.format(name=os.getenv("NAME", "world"), hostname=socket.gethostname())
 
 def change_to_hangul(eng):
-    if eng == "Received Claim":
-        return "보험금청구접수됨"
-    elif eng == "Assigned Examiner":
-        return "심사자배정됨"
-    elif eng == "Approved Review":
-        return "심사승인됨"
-    elif eng == "Declined Review":
-        return "심사거절됨"
-    elif eng == "Assigned Payment":
-        return "지급접수됨"
-    elif eng == "Completed Payment":
-        return "지급처리됨"
-    elif eng == "Canceled Claim":
-        return "보험금청구취소됨"
-    elif eng == "Canceled Review":
-        return "심사취소됨"
+
     return eng
 
 if __name__ == "__main__":
