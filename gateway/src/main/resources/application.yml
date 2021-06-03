@@ -1,0 +1,75 @@
+server:
+  port: 8088
+
+---
+
+spring:
+  profiles: default
+  cloud:
+    gateway:
+      routes:
+        - id: claim
+          uri: http://localhost:8081
+          predicates:
+            - Path=/claims/**,/claimPages/**
+        - id: review
+          uri: http://localhost:8082
+          predicates:
+            - Path=/reviews/** 
+        - id: payment
+          uri: http://localhost:8083
+          predicates:
+            - Path=/payments/** 
+        - id: history
+          uri: http://localhost:8084
+          predicates:
+            # - Path=/claimHistories/** /progressPages/**
+            - Path=/history/**
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowedOrigins:
+              - "*"
+            allowedMethods:
+              - "*"
+            allowedHeaders:
+              - "*"
+            allowCredentials: true
+
+
+---
+
+spring:
+  profiles: docker
+  cloud:
+    gateway:
+      routes:
+        - id: claim
+          uri: http://claim:8080
+          predicates:
+            - Path=/claims/**,/claimPages/**
+        - id: review
+          uri: http://review:8080
+          predicates:
+            - Path=/reviews/** 
+        - id: payment
+          uri: http://payment:8080
+          predicates:
+            - Path=/payments/** 
+        - id: history
+          uri: http://history:8080
+          predicates:
+            - Path=/history/**
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowedOrigins:
+              - "*"
+            allowedMethods:
+              - "*"
+            allowedHeaders:
+              - "*"
+            allowCredentials: true
+
+server:
+  port: 8080
