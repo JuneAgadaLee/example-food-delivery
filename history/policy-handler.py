@@ -18,7 +18,7 @@ if not rows:
 
 
 # To consume latest messages and auto-commit offsets
-consumer = KafkaConsumer('bomtada', bootstrap_servers=['localhost:9092'])
+consumer = KafkaConsumer('bomtada', bootstrap_servers=['my-kafka.kafka.svc.cluster.local:9092'])
 
 for message in consumer:
     print ("%s:%d:%d: key=%s value=%s" % (message.topic, message.partition,
