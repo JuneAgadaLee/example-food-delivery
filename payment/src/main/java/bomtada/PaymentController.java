@@ -16,7 +16,7 @@ import sun.misc.Unsafe;
 @RestController
 public class PaymentController {
 
-    @GetMapping("callmemleak")
+    @GetMapping("/callmemleak")
     public void callMemLeak() {
     try {
         this.memLeak();
