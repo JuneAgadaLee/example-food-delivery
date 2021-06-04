@@ -189,7 +189,7 @@
 
 ## 헥사고날 아키텍처 다이어그램 도출
     
-![image](https://user-images.githubusercontent.com/24379176/120560765-4a63c100-c43e-11eb-8487-e18708feef1d.png)
+![image](https://user-images.githubusercontent.com/24379176/120750432-51272c80-c541-11eb-98ca-dff1769bf15a.png)
 
 
     - Chris Richardson, MSA Patterns 참고하여 Inbound adaptor와 Outbound adaptor를 구분함
@@ -308,12 +308,12 @@ http http://localhost:8083/payments/1
 
 ## 폴리글랏 프로그래밍 / 폴리글랏 퍼시스턴스
 
-이력관리 서비스(history)의 시나리오인 청구상태를 고객이 화면에서 확인 가능하도록 하는 기능의 구현 파트는 해당 팀이 python 을 이용하여 구현하기로 하였다. 해당 파이썬 구현체는 각 이벤트를 수신하여 처리하는 Kafka Consumer와 화면을 제공하는 Flask로 구현되었고, DB는 sqlite3를 사용했다.
+이력관리 서비스(history)의 시나리오인 청구상태를 고객이 화면에서 확인 가능하도록 하는 기능의 구현 파트는 해당 팀이 python 을 이용하여 구현하기로 하였다. 해당 파이썬 구현체는 각 이벤트를 수신하여 처리하는 Kafka Consumer와 화면을 제공하는 Flask로 구현되었고, DB는 MySQL를 사용했다.
 ```
 # (history) Kafka Consumer
 
 from kafka import KafkaConsumer
-import sqlite3
+import mysql.connector
 import json
 
 # DB 연결 및 생성
@@ -331,7 +331,7 @@ for message in consumer:
 # (history) 청구이력 조회화면
 
 from flask import Flask, request
-import sqlite3
+import mysql.connector
 
 app = Flask(__name__)
 
