@@ -620,6 +620,21 @@ http http://localhost:8088/history    #Success
 * 각 구현체들은 github의 source repository에 구성
 * Image repository는 ECR 사용
 * yaml파일 기반의 Code Deploy
+```
+# application deploy
+
+cd insurance-claim/yaml
+
+kubectl apply -f configmap.yaml
+
+kubectl apply -f gateway.yaml
+kubectl apply -f claim.yaml
+kubectl apply -f review.yaml
+kubectl apply -f payment.yaml
+kubectl apply -f history.yaml
+kubectl apply -f consumer.yaml
+```
+![image](https://user-images.githubusercontent.com/24379176/120727424-78680480-c515-11eb-860b-93786dbca456.png)
 
 
 ## 동기식 호출 / 서킷 브레이킹 / 장애격리
@@ -826,36 +841,70 @@ Shortest transaction:	        0.01
 앞서 CB 는 시스템을 안정되게 운영할 수 있게 해줬지만 사용자의 요청을 100% 받아들여주지 못했기 때문에 이에 대한 보완책으로 자동화된 확장 기능을 적용하고자 한다. 
 
 
-- 결제서비스에 대한 replica 를 동적으로 늘려주도록 HPA 를 설정한다. 설정은 CPU 사용량이 15프로를 넘어서면 replica 를 10개까지 늘려준다:
+- 심사서비스에 대한 replica 를 동적으로 늘려주도록 HPA 를 설정한다. 설정은 CPU 사용량이 3프로를 넘어서면 replica 를 10개까지 늘려준다:
 ```
-kubectl autoscale deploy pay --min=1 --max=10 --cpu-percent=15
+kubectl autoscale deploy review --min=1 --max=10 --cpu-percent=3 -n bomtada
 ```
+- 심사서비스 배포시 yaml에 resource limit 설정을 추가 적용한다:
+```
+    spec:
+      containers:
+          ...
+          resources:
+            limits:
+              cpu: 500m
+            requests:
+              cpu: 200m
+```
+
 - CB 에서 했던 방식대로 워크로드를 2분 동안 걸어준다.
 ```
-siege -c100 -t120S -r10 --content-type "application/json" 'http://localhost:8081/orders POST {"item": "chicken"}'
+siege -c100 -t120S -r10 --content-type "application/json" 'http://claim:8080/claims/1 POST {"customerId":6, "price":50000, "status":"Canceled Claim", "claimDt":1622641792891}'
 ```
 - 오토스케일이 어떻게 되고 있는지 모니터링을 걸어둔다:
 ```
-kubectl get deploy pay -w
+kubectl get deploy review -w -n bomtada
 ```
 - 어느정도 시간이 흐른 후 (약 30초) 스케일 아웃이 벌어지는 것을 확인할 수 있다:
 ```
-NAME    DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
-pay     1         1         1            1           17s
-pay     1         2         1            1           45s
-pay     1         4         1            1           1m
-:
+NAME     READY   UP-TO-DATE   AVAILABLE   AGE
+review   1/1     1            1           5m
+review   1/4     1            1           8m13s
+review   1/4     1            1           8m13s
+review   1/4     1            1           8m13s
+review   1/4     4            1           8m13s
+review   1/7     4            1           8m28s
+review   1/7     4            1           8m28s
+review   1/7     4            1           8m28s
+review   1/7     7            1           8m28s
+review   1/10    7            1           8m43s
+review   1/10    7            1           8m43s
+review   1/10    7            1           8m44s
+review   1/10    10           1           8m44s
+review   2/10    10           2           9m42s
+review   3/10    10           3           9m42s
+review   4/10    10           4           9m42s
+review   5/10    10           5           9m56s
+review   6/10    10           6           9m57s
+review   7/10    10           7           9m57s
+review   8/10    10           8           10m
+review   9/10    10           9           10m
+review   10/10   10           10          10m
 ```
 - siege 의 로그를 보아도 전체적인 성공률이 높아진 것을 확인 할 수 있다. 
 ```
-Transactions:		        5078 hits
-Availability:		       92.45 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
+Transactions:                  17626 hits
+Availability:                  96.47 %
+Elapsed time:                 119.06 secs
+Data transferred:               1.86 MB
+Response time:                  0.67 secs
+Transaction rate:             148.04 trans/sec
+Throughput:                     0.02 MB/sec
+Concurrency:                   99.42
+Successful transactions:       17626
+Failed transactions:             645
+Longest transaction:            4.15
+Shortest transaction:           0.00
 ```
 
 
@@ -865,64 +914,173 @@ Concurrency:		       96.02
 
 - seige 로 배포작업 직전에 워크로드를 모니터링 함.
 ```
-siege -c100 -t120S -r10 --content-type "application/json" 'http://localhost:8081/orders POST {"item": "chicken"}'
+siege -c1 -v -t300s -r10 --content-type "application/json" 'http://payment:8080/payments'
 
 ** SIEGE 4.0.5
 ** Preparing 100 concurrent users for battle.
 The server is now under siege...
 
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.68 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
-HTTP/1.1 201     0.70 secs:     207 bytes ==> POST http://localhost:8081/orders
+HTTP/1.1 200     0.00 secs:     354 bytes ==> GET  /payments
+HTTP/1.1 200     0.02 secs:     354 bytes ==> GET  /payments
 :
 
 ```
 
 - 새버전으로의 배포 시작
 ```
-kubectl set image ...
+kubectl apply -f payment_na.yaml  # Readiness Probe 미설정 버전
+
+NAME                           READY   STATUS        RESTARTS   AGE
+pod/claim-956c9b89d-m6jg6      1/1     Running       0          31m
+pod/gateway-78678646b-fgwms    1/1     Running       0          31m
+pod/payment-859c66dbd4-m7pnj   0/1     Terminating   0          5m31s
+pod/payment-868dd9c698-wvb22   1/1     Running       0          3s
+pod/review-67b6fb4948-qcqrk    1/1     Running       0          31m
+...
+
 ```
 
 - seige 의 화면으로 넘어가서 Availability 가 100% 미만으로 떨어졌는지 확인
 ```
-Transactions:		        3078 hits
-Availability:		       70.45 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
+Transactions:                   3134 hits
+Availability:                  75.37 %
+Elapsed time:                  17.65 secs
+Data transferred:               1.06 MB
+Response time:                  0.01 secs
+Transaction rate:             177.56 trans/sec
+Throughput:                     0.06 MB/sec
+Concurrency:                    0.91
+Successful transactions:        3134
+Failed transactions:            1024
+Longest transaction:            0.52
+Shortest transaction:           0.00
 
 ```
-배포기간중 Availability 가 평소 100%에서 70% 대로 떨어지는 것을 확인. 원인은 쿠버네티스가 성급하게 새로 올려진 서비스를 READY 상태로 인식하여 서비스 유입을 진행한 것이기 때문. 이를 막기위해 Readiness Probe 를 설정함:
+배포기간중 Availability 가 평소 100%에서 75% 로 떨어지는 것을 확인. 원인은 쿠버네티스가 성급하게 새로 올려진 서비스를 READY 상태로 인식하여 서비스 유입을 진행한 것이기 때문. 이를 막기위해 Readiness Probe 를 설정함:
 
 ```
-# deployment.yaml 의 readiness probe 의 설정:
+kubectl apply -f payment.yaml  # Readiness Probe 설정 버전
 
+NAME                           READY   STATUS        RESTARTS   AGE
+pod/claim-956c9b89d-m6jg6      1/1     Running       0          38m
+pod/gateway-78678646b-fgwms    1/1     Running       0          38m
+pod/payment-859c66dbd4-csxpm   1/1     Running       0          39s
+pod/payment-868dd9c698-wvb22   0/1     Terminating   0          7m12s
+pod/review-67b6fb4948-qcqrk    1/1     Running       0          38m
+...
 
-kubectl apply -f kubernetes/deployment.yaml
 ```
 
 - 동일한 시나리오로 재배포 한 후 Availability 확인:
 ```
-Transactions:		        3078 hits
-Availability:		       100 %
-Elapsed time:		       120 secs
-Data transferred:	        0.34 MB
-Response time:		        5.60 secs
-Transaction rate:	       17.15 trans/sec
-Throughput:		        0.01 MB/sec
-Concurrency:		       96.02
+Transactions:                 109148 hits
+Availability:                 100.00 %
+Elapsed time:                 299.56 secs
+Data transferred:              36.85 MB
+Response time:                  0.00 secs
+Transaction rate:             364.36 trans/sec
+Throughput:                     0.12 MB/sec
+Concurrency:                    0.96
+Successful transactions:      109148
+Failed transactions:               0
+Longest transaction:            1.05
+Shortest transaction:           0.00
 
 ```
 
 배포기간 동안 Availability 가 변화없기 때문에 무정지 재배포가 성공한 것으로 확인됨.
 
+
 ## Self-healing (Liveness Probe)
 
+- 메모리 과부하를 발생시키는 API를 payment 서비스에 추가하여, 임의로 서비스가 동작하지 않는 상황을 만든다. 그 후 LivenessProbe 설정에 의하여 자동으로 서비스가 재시작되는지 확인한다.
+```
+# (payment) PaymentController.java
 
+@RestController
+public class PaymentController {
+
+    @GetMapping("/callmemleak")
+    public void callMemLeak() {
+    try {
+        this.memLeak();
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    }
+
+    public void memLeak() throws NoSuchFieldException, ClassNotFoundException, IllegalAccessException {
+        Class unsafeClass = Class.forName("sun.misc.Unsafe");
+        
+        Field f = unsafeClass.getDeclaredField("theUnsafe");
+        f.setAccessible(true);
+        Unsafe unsafe = (Unsafe) f.get(null);
+        System.out.print("4..3..2..1...");
+        try {
+            for(;;)
+            unsafe.allocateMemory(1024*1024);
+        } catch(Error e) {
+            System.out.println("Boom!");
+            e.printStackTrace();
+        }
+    }
+}
+
+```
+- payment 서비스에 Liveness Probe 설정을 추가한 payment_bomb.yaml 생성
+```
+# Liveness Probe 적용
+kubectl apply -f payment_bomb.yaml
+
+# 설정 확인
+kubectl get deploy payment -n bomtada -o yaml
+
+...
+template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: payment
+    spec:
+      containers:
+      - image: 879772956301.dkr.ecr.ap-southeast-1.amazonaws.com/user10-payment:bomb
+        imagePullPolicy: Always
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /actuator/health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 120
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 2
+        name: payment
+        ports:
+        - containerPort: 8080
+...
+
+```
+- 메모리 과부하 발생
+```
+kubectl exec -it siege -n bomtada -- /bin/bash
+
+# 메모리 과부하 API 호출
+http http://payment:8080/callmemleak
+
+# pod 상태 확인
+kubectl get po -w -n bomtada
+
+NAME                       READY   STATUS    RESTARTS   AGE
+claim-956c9b89d-m6jg6      1/1     Running   0          127m
+gateway-78678646b-fgwms    1/1     Running   0          127m
+payment-5b7444449f-mp4kf   1/1     Running   0          9m42s
+review-67b6fb4948-qcqrk    1/1     Running   0          127m
+siege                      1/1     Running   0          128m
+payment-5b7444449f-mp4kf   0/1     OOMKilled   0          10m
+payment-5b7444449f-mp4kf   1/1     Running     1          10m
+```
+- pod 상태 확인을 통해 payment서비스의 RESTARTS 횟수가 증가한 것을 확인할 수 있다.
 
 ## ConfigMap 사용
 
@@ -972,7 +1130,37 @@ spec:
                   key: api.url.review
 ```
 
-* kubectl describe pod/claim-588cb89c6b-gmw8h -n bomtada
+* kubectl describe pod/claim-7fdc457d8d-sx7mr -n bomtada
 ```
+Name:         claim-7fdc457d8d-sx7mr
+Namespace:    bomtada
+Priority:     0
+Node:         ip-192-168-54-112.ap-southeast-1.compute.internal/192.168.54.112
+Start Time:   Fri, 04 Jun 2021 00:09:22 +0000
+Labels:       app=claim
+              pod-template-hash=7fdc457d8d
+Annotations:  kubernetes.io/psp: eks.privileged
+Status:       Running
+IP:           192.168.44.143
+IPs:
+  IP:           192.168.44.143
+Controlled By:  ReplicaSet/claim-7fdc457d8d
+Containers:
+  claim:
+    Container ID:   docker://3d47bc47a32d9039a555cf56394fb3ad7da6a1e8827b56a7392f639f515a32ce
+    Image:          879772956301.dkr.ecr.ap-southeast-1.amazonaws.com/user10-claim:latest
+    Image ID:       docker-pullable://879772956301.dkr.ecr.ap-southeast-1.amazonaws.com/user10-claim@sha256:156d492bdb8159ba34b2cd4111896caa9e3441995107b4a0038c0e44811a56fd
+    Port:           8080/TCP
+    Host Port:      0/TCP
+    State:          Running
+      Started:      Fri, 04 Jun 2021 00:09:23 +0000
+    Ready:          True
+    Restart Count:  0
+    Liveness:       http-get http://:8080/actuator/health delay=120s timeout=2s period=5s #success=1 #failure=5
+    Readiness:      http-get http://:8080/actuator/health delay=10s timeout=2s period=5s #success=1 #failure=10
+    Environment:
+      api.url.review:  <set to the key 'api.url.review' of config map 'bomtada-config'>  Optional: false
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-pmvj6 (ro)
 ```
 
