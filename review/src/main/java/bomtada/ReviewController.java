@@ -38,11 +38,11 @@ import java.util.Optional;
         }
 
         // circuit break 테스트를 위한 임의 부하 처리
-        // try {
-        //     Thread.currentThread().sleep((long) (400 + (Math.random() * 220)));
-        // } catch (InterruptedException e) {
-        //     e.printStackTrace();
-        // }
+        try {
+            Thread.currentThread().sleep((long) (400 + (Math.random() * 220)));
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
 
         return status;
     }
